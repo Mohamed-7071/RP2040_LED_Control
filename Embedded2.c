@@ -39,8 +39,23 @@
 
 // ===== GPIO PIN DEFINITIONS =====
 #define LED_PIN         2   // GP2 → LED (blinks 5 times on startup)
+#define BUTTON_PIN     14   // GP14 → Button (input with pull-up)
+#define BUZZER_PIN     21   // GP21 → Buzzer (output, active LOW)
+#define LIMIT_SWITCH   19   // GP19 → Limit switch (input with pull-up)
+#define LIMIT_LED      20   // GP20 → LED for limit switch (output)
+
+// Electromagnet definitions
+#define ELECTROMAGNET_IN1    13   // GP13 → L298N IN1
+#define ELECTROMAGNET_IN2    12   // GP12 → L298N IN2
+#define ELECTROMAGNET_EN     15   // GP15 → L298N Enable (PWM)
 
 // Function prototypes
+void setup_buzzer_and_button(void);
+void setup_limit_switch(void);
+void setup_electromagnet(void);
+void electromagnet_on(void);
+void electromagnet_off(void);
+void set_electromagnet_pwm(uint8_t duty_percent);
 void lcd_init(void);
 void lcd_write_nibble(uint8_t nibble);
 void lcd_toggle_enable(uint8_t val);
@@ -51,9 +66,9 @@ void lcd_string(const char *s);
 void i2c_scan(void);
 
 // Motor definitions
-#define MOTOR_X_DIR_1   18   // GP18 → L298N IN3
-#define MOTOR_X_DIR_2   17   // GP17 → L298N IN4
-#define MOTOR_X_PWM     16   // GP16 → L298N ENa (PWM)
+#define MOTOR_X_DIR_1   17   // GP17 → L298N IN3
+#define MOTOR_X_DIR_2   16   // GP16 → L298N IN4
+#define MOTOR_X_PWM     18   // GP18 → L298N ENa (PWM)
 #define POT_PIN         26   // GP26 → Potentiometer (ADC0)
 
 // PWM configuration
@@ -149,42 +164,89 @@ int main(void) {
     printf("\nInitializing motor...\n");
     setup_motor();
     
-    // Initialize ADC for potentiometer
-    printf("Initializing ADC for potentiometer on GP%d...\n", POT_PIN);
-    adc_init();
-    adc_gpio_init(POT_PIN);
-    adc_select_input(0); // ADC0 for GP26
+    // Initialize buzzer and button
+    setup_buzzer_and_button();
     
-    // Test potentiometer for 10 seconds
-    printf("\n========== POTENTIOMETER TEST ==========\n");
-    printf("Rotate the potentiometer and watch the values...\n");
-    printf("Testing for 10 seconds...\n\n");
-    test_potentiometer();
+    // Initialize limit switch and LED
+    setup_limit_switch();
+    
+    // Initialize electromagnet
+    setup_electromagnet();
     
     sleep_ms(2000);
     
-    // Potentiometer control mode - replaces fixed motor tests
-    printf("\n========== POTENTIOMETER MOTOR CONTROL ==========\n");
-    printf("Rotate potentiometer to control motor speed and direction\n");
-    printf("Left = CCW | Center = STOP | Right = CW\n");
-    printf("Running for 30 seconds...\n\n");
+    // Motor test sequence
+    printf("\n========== MOTOR TEST SEQUENCE ==========\n");
     
     lcd_clear();
     lcd_set_cursor(0, 0);
-    lcd_string("POT Control ON");
-    sleep_ms(2000);
+    lcd_string("Motor: CW");
+    motorX_CW();  // Run clockwise for 4 seconds
     
-    potentiometer_control_motor();
+    sleep_ms(500);
     
-    // Stop motor after control
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_string("Motor: CCW");
+    motorX_CCW(); // Run counter-clockwise for 4 seconds
+    
     stopAll();
     lcd_clear();
     lcd_set_cursor(0, 0);
     lcd_string("Motor: STOPPED");
     
-    // Keep program running
+    printf("\n========== MOTOR TEST COMPLETE ==========\n");
+    sleep_ms(2000);
+    
+    // Electromagnet test
+    printf("\n========== ELECTROMAGNET TEST ==========\n");
+    
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_string("Electromagnet: ON");
+    electromagnet_on();
+    sleep_ms(3000);
+    
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_string("Electromagnet: OFF");
+    electromagnet_off();
+    
+    printf("\n========== ELECTROMAGNET TEST COMPLETE ==========\n");
+    sleep_ms(2000);
+    
+    // Button & Buzzer control
+    printf("\n========== BUTTON & BUZZER ACTIVE ==========\n");
+    printf("Press and hold button on GP%d to activate buzzer on GP%d\n\n", BUTTON_PIN, BUZZER_PIN);
+    
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_string("Hold Button:");
+    lcd_set_cursor(1, 0);
+    lcd_string("Buzzer ON/OFF");
+    
+    // Keep program running and monitor button for buzzer control
     while (1) {
-        tight_loop_contents();
+        // Button is active LOW (pressed = 0, released = 1)
+        // Buzzer is active LOW (ON = 0, OFF = 1)
+        if (!gpio_get(BUTTON_PIN)) {
+            // Button pressed - turn buzzer ON (active LOW)
+            gpio_put(BUZZER_PIN, 0);
+        } else {
+            // Button released - turn buzzer OFF (active LOW)
+            gpio_put(BUZZER_PIN, 1);
+        }
+        
+        // Limit switch control (active LOW with pull-up)
+        if (!gpio_get(LIMIT_SWITCH)) {
+            // Limit switch pressed - turn LED ON
+            gpio_put(LIMIT_LED, 1);
+        } else {
+            // Limit switch released - turn LED OFF
+            gpio_put(LIMIT_LED, 0);
+        }
+        
+        sleep_ms(10); // Small delay to debounce
     }
 }
 
@@ -409,6 +471,87 @@ void potentiometerControl(void) {
 }
 */
 
+// ===== BUZZER AND BUTTON SETUP =====
+void setup_buzzer_and_button(void) {
+    printf("Setting up buzzer and button...\n");
+    
+    // Initialize button pin with pull-up resistor
+    gpio_init(BUTTON_PIN);
+    gpio_set_dir(BUTTON_PIN, GPIO_IN);
+    gpio_pull_up(BUTTON_PIN);  // Enable internal pull-up
+    
+    // Initialize buzzer pin
+    gpio_init(BUZZER_PIN);
+    gpio_set_dir(BUZZER_PIN, GPIO_OUT);
+    gpio_put(BUZZER_PIN, 1);  // Start with buzzer OFF (active LOW)
+    
+    printf("Button initialized on GP%d (active LOW with pull-up)\n", BUTTON_PIN);
+    printf("Buzzer initialized on GP%d (active LOW)\n", BUZZER_PIN);
+}
+
+// ===== LIMIT SWITCH SETUP =====
+void setup_limit_switch(void) {
+    printf("Setting up limit switch and LED...\n");
+    
+    // Initialize limit switch pin with pull-up resistor
+    gpio_init(LIMIT_SWITCH);
+    gpio_set_dir(LIMIT_SWITCH, GPIO_IN);
+    gpio_pull_up(LIMIT_SWITCH);  // Enable internal pull-up
+    
+    // Initialize limit LED pin
+    gpio_init(LIMIT_LED);
+    gpio_set_dir(LIMIT_LED, GPIO_OUT);
+    gpio_put(LIMIT_LED, 0);  // Start with LED OFF
+    
+    printf("Limit switch initialized on GP%d (active LOW with pull-up)\n", LIMIT_SWITCH);
+    printf("Limit LED initialized on GP%d\n", LIMIT_LED);
+}
+
+// ===== ELECTROMAGNET CONTROL =====
+void setup_electromagnet(void) {
+    printf("Setting up electromagnet...\n");
+    
+    // Initialize control pins
+    gpio_init(ELECTROMAGNET_IN1);
+    gpio_set_dir(ELECTROMAGNET_IN1, GPIO_OUT);
+    gpio_put(ELECTROMAGNET_IN1, 0);
+    
+    gpio_init(ELECTROMAGNET_IN2);
+    gpio_set_dir(ELECTROMAGNET_IN2, GPIO_OUT);
+    gpio_put(ELECTROMAGNET_IN2, 0);
+    
+    // Initialize PWM for enable pin
+    gpio_set_function(ELECTROMAGNET_EN, GPIO_FUNC_PWM);
+    uint slice = pwm_gpio_to_slice_num(ELECTROMAGNET_EN);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_clkdiv(&cfg, 1.0f);
+    pwm_config_set_wrap(&cfg, PWM_WRAP);
+    pwm_init(slice, &cfg, true);
+    pwm_set_gpio_level(ELECTROMAGNET_EN, 0);
+    
+    printf("Electromagnet initialized on GP%d (IN1), GP%d (IN2), GP%d (Enable)\n", 
+           ELECTROMAGNET_IN1, ELECTROMAGNET_IN2, ELECTROMAGNET_EN);
+}
+
+void set_electromagnet_pwm(uint8_t duty_percent) {
+    uint16_t level = (PWM_WRAP * duty_percent) / 100;
+    pwm_set_gpio_level(ELECTROMAGNET_EN, level);
+}
+
+void electromagnet_on(void) {
+    printf("Electromagnet ON...\n");
+    gpio_put(ELECTROMAGNET_IN1, 1);
+    gpio_put(ELECTROMAGNET_IN2, 0);
+    set_electromagnet_pwm(100);  // Full power
+}
+
+void electromagnet_off(void) {
+    printf("Electromagnet OFF...\n");
+    set_electromagnet_pwm(0);
+    gpio_put(ELECTROMAGNET_IN1, 0);
+    gpio_put(ELECTROMAGNET_IN2, 0);
+}
+
 // ===== MOTOR CONTROL FUNCTIONS =====
 void setup_motor(void) {
     printf("Setting up motor pins...\n");
@@ -441,19 +584,23 @@ void set_motor_pwm(uint8_t duty_percent) {
 }
 
 void motorX_CW(void) {
+    printf("Motor CW for 4 seconds...\n");
     gpio_put(MOTOR_X_DIR_1, 1);   // IN1 = HIGH
     gpio_put(MOTOR_X_DIR_2, 0);   // IN2 = LOW
     set_motor_pwm(100);           // Full speed
-    sleep_ms(3000);
+    sleep_ms(4000);
     set_motor_pwm(0);
+    printf("Motor CW stopped\n");
 }
 
 void motorX_CCW(void) {
+    printf("Motor CCW for 4 seconds...\n");
     gpio_put(MOTOR_X_DIR_1, 0);   // IN1 = LOW
     gpio_put(MOTOR_X_DIR_2, 1);   // IN2 = HIGH
     set_motor_pwm(100);           // Full speed
-    sleep_ms(3000);
+    sleep_ms(4000);
     set_motor_pwm(0);
+    printf("Motor CCW stopped\n");
 }
 
 void stopAll(void) {
