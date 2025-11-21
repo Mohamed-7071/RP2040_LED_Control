@@ -40,13 +40,22 @@
 // ===== GPIO PIN DEFINITIONS =====
 #define LED_PIN         2   // GP2 → LED (blinks 5 times on startup)
 #define BUTTON_PIN     14   // GP14 → Button (input with pull-up)
-#define BUZZER_PIN     15   // GP15 → Buzzer (output, active LOW)
+#define BUZZER_PIN     21   // GP21 → Buzzer (output, active LOW)
 #define LIMIT_SWITCH   19   // GP19 → Limit switch (input with pull-up)
 #define LIMIT_LED      20   // GP20 → LED for limit switch (output)
+
+// Electromagnet definitions
+#define ELECTROMAGNET_IN1    13   // GP13 → L298N IN1
+#define ELECTROMAGNET_IN2    12   // GP12 → L298N IN2
+#define ELECTROMAGNET_EN     15   // GP15 → L298N Enable (PWM)
 
 // Function prototypes
 void setup_buzzer_and_button(void);
 void setup_limit_switch(void);
+void setup_electromagnet(void);
+void electromagnet_on(void);
+void electromagnet_off(void);
+void set_electromagnet_pwm(uint8_t duty_percent);
 void lcd_init(void);
 void lcd_write_nibble(uint8_t nibble);
 void lcd_toggle_enable(uint8_t val);
@@ -161,6 +170,9 @@ int main(void) {
     // Initialize limit switch and LED
     setup_limit_switch();
     
+    // Initialize electromagnet
+    setup_electromagnet();
+    
     sleep_ms(2000);
     
     // Motor test sequence
@@ -184,6 +196,23 @@ int main(void) {
     lcd_string("Motor: STOPPED");
     
     printf("\n========== MOTOR TEST COMPLETE ==========\n");
+    sleep_ms(2000);
+    
+    // Electromagnet test
+    printf("\n========== ELECTROMAGNET TEST ==========\n");
+    
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_string("Electromagnet: ON");
+    electromagnet_on();
+    sleep_ms(3000);
+    
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_string("Electromagnet: OFF");
+    electromagnet_off();
+    
+    printf("\n========== ELECTROMAGNET TEST COMPLETE ==========\n");
     sleep_ms(2000);
     
     // Button & Buzzer control
@@ -476,6 +505,51 @@ void setup_limit_switch(void) {
     
     printf("Limit switch initialized on GP%d (active LOW with pull-up)\n", LIMIT_SWITCH);
     printf("Limit LED initialized on GP%d\n", LIMIT_LED);
+}
+
+// ===== ELECTROMAGNET CONTROL =====
+void setup_electromagnet(void) {
+    printf("Setting up electromagnet...\n");
+    
+    // Initialize control pins
+    gpio_init(ELECTROMAGNET_IN1);
+    gpio_set_dir(ELECTROMAGNET_IN1, GPIO_OUT);
+    gpio_put(ELECTROMAGNET_IN1, 0);
+    
+    gpio_init(ELECTROMAGNET_IN2);
+    gpio_set_dir(ELECTROMAGNET_IN2, GPIO_OUT);
+    gpio_put(ELECTROMAGNET_IN2, 0);
+    
+    // Initialize PWM for enable pin
+    gpio_set_function(ELECTROMAGNET_EN, GPIO_FUNC_PWM);
+    uint slice = pwm_gpio_to_slice_num(ELECTROMAGNET_EN);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_clkdiv(&cfg, 1.0f);
+    pwm_config_set_wrap(&cfg, PWM_WRAP);
+    pwm_init(slice, &cfg, true);
+    pwm_set_gpio_level(ELECTROMAGNET_EN, 0);
+    
+    printf("Electromagnet initialized on GP%d (IN1), GP%d (IN2), GP%d (Enable)\n", 
+           ELECTROMAGNET_IN1, ELECTROMAGNET_IN2, ELECTROMAGNET_EN);
+}
+
+void set_electromagnet_pwm(uint8_t duty_percent) {
+    uint16_t level = (PWM_WRAP * duty_percent) / 100;
+    pwm_set_gpio_level(ELECTROMAGNET_EN, level);
+}
+
+void electromagnet_on(void) {
+    printf("Electromagnet ON...\n");
+    gpio_put(ELECTROMAGNET_IN1, 1);
+    gpio_put(ELECTROMAGNET_IN2, 0);
+    set_electromagnet_pwm(100);  // Full power
+}
+
+void electromagnet_off(void) {
+    printf("Electromagnet OFF...\n");
+    set_electromagnet_pwm(0);
+    gpio_put(ELECTROMAGNET_IN1, 0);
+    gpio_put(ELECTROMAGNET_IN2, 0);
 }
 
 // ===== MOTOR CONTROL FUNCTIONS =====
